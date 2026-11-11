@@ -1,0 +1,89 @@
+name: Render a story clip
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Film title (max 70 characters)'
+        required: true
+        type: string
+      script:
+        description: 'Narration: one spoken line per scene, 1-12 lines'
+        required: true
+        type: string
+      voice:
+        description: 'Kokoro voice'
+        required: false
+        default: 'af_heart'
+        type: string
+
+concurrency:
+  group: madikwe-render
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: ffmpeg 7 (static)
+        run: |
+          curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar xJ
+          sudo cp ffmpeg-7.0.2-amd64-static/ffmpeg ffmpeg-7.0.2-amd64-static/ffprobe /usr/local/bin/
+          ffmpeg -version | head -1
+
+      - name: Restore the film library cache
+        id: libcache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/lemo-opuscar
+            /home/runner/.cache/ms-playwright
+          key: lemo-opuscar-9eb7739-v1
+
+      - name: Lemo-Opuscar library + deps
+        env:
+          LEMO_OPUSCAR_HOME: /home/runner/lemo-opuscar
+        run: |
+          if [ ! -d /home/runner/lemo-opuscar ]; then
+            git clone --quiet https://github.com/lemomo-ai/lemo-opuscar /home/runner/lemo-opuscar
+          fi
+          cd /home/runner/lemo-opuscar
+          git fetch --quiet --depth 1 origin 9eb7739a0fca4c6990fe966cb8b87b1930f7193a && git checkout --quiet FETCH_HEAD
+          sh plugin/skills/lemo-opuscar/scripts/setup.sh deps voice
+
+      - name: Render the clip
+        env:
+          LIB: /home/runner/lemo-opuscar
+          TITLE: ${{ inputs.title }}
+          VOICE: ${{ inputs.voice }}
+          SLUG: clip-${{ github.run_number }}
+        run: |
+          printf '%s\n' "${{ inputs.script }}" > /tmp/script.txt
+          SCRIPT_FILE=/tmp/script.txt sh template/build.sh
+
+      - name: Publish the clip as a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd template/work/out
+          ls -la
+          gh release create "clip-${{ github.run_id }}" \
+            --repo ${{ github.repository }} \
+            --title "${{ inputs.title }}" \
+            --notes "Rendered by Madikwe's workshop on $(date -u +'%Y-%m-%d %H:%M UTC'). Voice: ${{ inputs.voice }}." \
+            --latest=false \
+            clip-*.mp4 poster.jpg
