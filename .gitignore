@@ -1,0 +1,4 @@
+template/work/
+work/
+__pycache__/
+*.wav.tmp
